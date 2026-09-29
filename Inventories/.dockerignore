@@ -1,0 +1,7 @@
+# El jar se compila dentro de la imagen (ver Dockerfile); nada de esto hace falta en el contexto.
+target/
+.idea/
+*.iml
+.mvn/
+mvnw
+mvnw.cmd

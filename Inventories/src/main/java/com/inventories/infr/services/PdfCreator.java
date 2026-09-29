@@ -37,7 +37,8 @@ public class PdfCreator {
         document = new Document(PageSize.A4, 35, 30, 50, 50);
         String pdfPath = ("src/main/resources/files/");
         Path path = Paths.get("src/main/resources/files/");
-        Files.createDirectories(path.getParent());
+        // Crea la carpeta completa: dentro del contenedor (WORKDIR /app) no existe src/main/resources/files.
+        Files.createDirectories(path);
         fileOutputStream = new FileOutputStream(pdfPath + "summary_"+idInventory+".pdf" );
 
         PdfWriter.getInstance(document, fileOutputStream);
