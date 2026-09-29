@@ -1,0 +1,29 @@
+services:
+  inventories-api:
+    build: Inventories
+    mem_limit: 512m
+    ports:
+      - "8081:8081"
+    environment:
+      URL_DB_INVENTORIES_COMEX: jdbc:mysql://inventories-db:3306/comex_inventory?createDatabaseIfNotExist=true
+      USER_DB_INVENTORIES_COMEX: root
+      PASSWORD_DB_INVENTORIES_COMEX: Lenoleoncito
+      JWT_EXPIRATION_TIME_INVENTORIES_COMEX: 86400000
+      JWT_SECRET_KEY_INVENTORIES_COMEX: glzpM/gZorji8JhnnveS30l1FbJMUxry/xdrSF5AJF4=
+    restart: always
+    depends_on:
+      inventories-db:
+        condition: service_healthy
+  inventories-db:
+    image: mysql:8.0.46
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: Lenoleoncito
+      MYSQL_PASSWORD: Lenoleoncito
+      MYSQL_DATABASE: comex_inventory
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      timeout: 10s
+      retries: 10
