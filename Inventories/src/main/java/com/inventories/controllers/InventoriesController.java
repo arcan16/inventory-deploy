@@ -8,19 +8,24 @@ import com.inventories.dto.products.ProductPresentationDTO;
 import com.inventories.dto.products.ProductsDTO;
 import com.inventories.dto.productsCount.ProductCountsEntryDTO;
 import com.inventories.dto.stock.StockListDTO;
+import com.inventories.infr.services.InventoryLockService;
 import com.inventories.infr.services.InventoryService;
 import com.inventories.models.InventoriesEntity;
 import com.inventories.models.ProductCountsEntity;
+import com.inventories.models.UserEntity;
 import com.inventories.models.enums.InventoryStatus;
 import com.inventories.repositories.InventoriesRepository;
 import com.inventories.repositories.ProductCountsRepository;
 import com.inventories.repositories.ProductPresentationsRepository;
 import com.inventories.repositories.ProductsRepository;
 import com.inventories.repositories.StockRepository;
+import com.inventories.repositories.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -48,6 +53,12 @@ public class InventoriesController {
 
     @Autowired
     private InventoryService inventoryService;
+
+    @Autowired
+    private InventoryLockService inventoryLockService;
+
+    @Autowired
+    private UserRepository userRepository;
 
     @GetMapping
     public ResponseEntity<?> getAllInventories(@PageableDefault(size = 10)Pageable pageable){
@@ -112,7 +123,8 @@ public class InventoriesController {
         if(inventory.getStatus() == InventoryStatus.CLOSED)
             return ResponseEntity.badRequest().body("{\"err\": \" El inventario ya esta cerrado \"}");
 
-        inventory.setStatus(InventoryStatus.CLOSED);
+        // Al cerrar se suelta el bloqueo de quien lo estaba contando (Finalizar conteo).
+        InventoryLockService.clearLock(inventory, InventoryStatus.CLOSED);
         inventoriesRepository.save(inventory);
         return ResponseEntity.ok(new InventoriesDTO(inventory));
     }
@@ -132,9 +144,43 @@ public class InventoriesController {
         if(inventory.getStatus() != InventoryStatus.CLOSED)
             return ResponseEntity.badRequest().body("{\"err\": \" El inventario no esta cerrado \"}");
 
-        inventory.setStatus(InventoryStatus.OPENED);
+        InventoryLockService.clearLock(inventory, InventoryStatus.OPENED);
         inventoriesRepository.save(inventory);
         return ResponseEntity.ok(new InventoriesDTO(inventory));
+    }
+
+    /**
+     * Marca el inventario como en uso (LOCKED) por el usuario autenticado al
+     * entrar a su conteo. La app lo vuelve a llamar cada minuto para renovar el
+     * bloqueo; sin renovacion, se libera solo (ver InventoryLockService).
+     * 409 si otro usuario lo esta usando, indicando quien.
+     */
+    @PutMapping("/{idInventory}/lock")
+    public ResponseEntity<?> lockInventory(@PathVariable Long idInventory, Authentication authentication){
+        InventoryLockService.Result result = inventoryLockService.lock(idInventory, currentUser(authentication));
+        return switch (result.outcome()) {
+            case NOT_FOUND -> ResponseEntity.badRequest().body("{\"err\": \"El inventario no existe\"}");
+            case CLOSED -> ResponseEntity.badRequest().body("{\"err\": \"El inventario esta cerrado\"}");
+            case LOCKED_BY_OTHER -> ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("{\"err\": \"El inventario lo esta usando " + result.holder() + "\"}");
+            default -> ResponseEntity.ok(new InventoriesDTO(result.inventory()));
+        };
+    }
+
+    /**
+     * Regresa el inventario a OPENED al salir de su conteo (o al mandar la app a
+     * segundo plano). Si el bloqueo es de otro usuario no cambia nada.
+     */
+    @PutMapping("/{idInventory}/unlock")
+    public ResponseEntity<?> unlockInventory(@PathVariable Long idInventory, Authentication authentication){
+        InventoryLockService.Result result = inventoryLockService.unlock(idInventory, currentUser(authentication));
+        if(result.outcome() == InventoryLockService.Outcome.NOT_FOUND)
+            return ResponseEntity.badRequest().body("{\"err\": \"El inventario no existe\"}");
+        return ResponseEntity.ok(new InventoriesDTO(result.inventory()));
+    }
+
+    private UserEntity currentUser(Authentication authentication){
+        return authentication == null ? null : userRepository.findByUsuario(authentication.getName()).orElse(null);
     }
 
     /**
