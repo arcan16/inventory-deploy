@@ -23,7 +23,7 @@ import java.util.Optional;
  * La app renueva el bloqueo cada minuto (heartbeat = volver a llamar a lock).
  * Si deja de renovarlo -la app se cerro de golpe, se quedo sin bateria o perdio
  * la red justo al salir- el bloqueo se considera abandonado tras LOCK_TIMEOUT:
- * otro usuario ya puede tomarlo y releaseStaleLocks lo regresa a OPENED.
+ * otro dispositivo ya puede tomarlo y releaseStaleLocks lo regresa a OPENED.
  */
 @Service
 public class InventoryLockService {
@@ -35,51 +35,64 @@ public class InventoryLockService {
 
     public enum Outcome { LOCKED, UNLOCKED, NOT_FOUND, CLOSED, LOCKED_BY_OTHER }
 
-    /** inventory es null si NOT_FOUND; holder es el usuario que lo tiene si LOCKED_BY_OTHER. */
-    public record Result(Outcome outcome, InventoriesEntity inventory, String holder) {
+    /**
+     * inventory es null si NOT_FOUND. Si LOCKED_BY_OTHER: holder es el usuario que
+     * lo tiene y sameUser indica que es la misma cuenta, pero en otro dispositivo.
+     */
+    public record Result(Outcome outcome, InventoriesEntity inventory, String holder, boolean sameUser) {
+        Result(Outcome outcome, InventoriesEntity inventory) {
+            this(outcome, inventory, null, false);
+        }
     }
 
     @Autowired
     private InventoriesRepository inventoriesRepository;
 
-    /** Toma el inventario para el usuario, o renueva su bloqueo si ya era suyo. */
+    /**
+     * Toma el inventario para este dispositivo, o renueva su bloqueo si ya era
+     * suyo. El bloqueo es por dispositivo (deviceId = header X-Device-Id que envia
+     * cada instalacion de la app): mientras este vigente, nadie mas puede entrar,
+     * ni siquiera el mismo usuario desde otro telefono.
+     */
     @Transactional
-    public Result lock(Long inventoryId, UserEntity user) {
+    public Result lock(Long inventoryId, UserEntity user, String deviceId) {
         Optional<InventoriesEntity> found = inventoriesRepository.findByIdForUpdate(inventoryId);
         if (found.isEmpty())
-            return new Result(Outcome.NOT_FOUND, null, null);
+            return new Result(Outcome.NOT_FOUND, null);
 
         InventoriesEntity inventory = found.get();
         if (inventory.getStatus() == InventoryStatus.CLOSED)
-            return new Result(Outcome.CLOSED, inventory, null);
+            return new Result(Outcome.CLOSED, inventory);
 
-        if (inventory.getStatus() == InventoryStatus.LOCKED && isHeldByOther(inventory, user) && !isStale(inventory))
-            return new Result(Outcome.LOCKED_BY_OTHER, inventory, holderName(inventory));
+        if (inventory.getStatus() == InventoryStatus.LOCKED && isHeldByOther(inventory, user, deviceId) && !isStale(inventory))
+            return new Result(Outcome.LOCKED_BY_OTHER, inventory, holderName(inventory), isSameUser(inventory, user));
 
         inventory.setStatus(InventoryStatus.LOCKED);
         inventory.setLockedBy(user);
         inventory.setLockedAt(now());
+        inventory.setLockedDevice(deviceId);
         inventoriesRepository.save(inventory);
-        return new Result(Outcome.LOCKED, inventory, null);
+        return new Result(Outcome.LOCKED, inventory);
     }
 
     /**
-     * Regresa el inventario a OPENED si el bloqueo es del usuario (o ya estaba
-     * abandonado). Si no esta bloqueado, o lo tiene otro usuario, no cambia nada:
-     * salir del conteo nunca debe liberar el bloqueo de otra persona.
+     * Regresa el inventario a OPENED si el bloqueo es de este dispositivo (o ya
+     * estaba abandonado). Si no esta bloqueado, o lo tiene otro dispositivo, no
+     * cambia nada: salir del conteo nunca debe liberar el bloqueo de otro.
      */
     @Transactional
-    public Result unlock(Long inventoryId, UserEntity user) {
+    public Result unlock(Long inventoryId, UserEntity user, String deviceId) {
         Optional<InventoriesEntity> found = inventoriesRepository.findByIdForUpdate(inventoryId);
         if (found.isEmpty())
-            return new Result(Outcome.NOT_FOUND, null, null);
+            return new Result(Outcome.NOT_FOUND, null);
 
         InventoriesEntity inventory = found.get();
-        if (inventory.getStatus() == InventoryStatus.LOCKED && (!isHeldByOther(inventory, user) || isStale(inventory))) {
+        if (inventory.getStatus() == InventoryStatus.LOCKED
+                && (!isHeldByOther(inventory, user, deviceId) || isStale(inventory))) {
             clearLock(inventory, InventoryStatus.OPENED);
             inventoriesRepository.save(inventory);
         }
-        return new Result(Outcome.UNLOCKED, inventory, null);
+        return new Result(Outcome.UNLOCKED, inventory);
     }
 
     /** Quita los datos del bloqueo y deja el inventario en el estado indicado. */
@@ -87,6 +100,7 @@ public class InventoryLockService {
         inventory.setStatus(status);
         inventory.setLockedBy(null);
         inventory.setLockedAt(null);
+        inventory.setLockedDevice(null);
     }
 
     /** Cada minuto regresa a OPENED los bloqueos que nadie renovo en LOCK_TIMEOUT. */
@@ -99,9 +113,22 @@ public class InventoryLockService {
             log.info("Bloqueos de inventario abandonados liberados: {}", released);
     }
 
-    private static boolean isHeldByOther(InventoriesEntity inventory, UserEntity user) {
+    /**
+     * El dueño del bloqueo es el dispositivo que lo tomo. Una peticion sin
+     * X-Device-Id (version vieja de la app) nunca es dueña de un bloqueo con
+     * dispositivo. Solo los bloqueos sin dispositivo (tomados por una version
+     * vieja) se comparan por usuario.
+     */
+    private static boolean isHeldByOther(InventoriesEntity inventory, UserEntity user, String deviceId) {
+        if (inventory.getLockedDevice() != null)
+            return deviceId == null || !inventory.getLockedDevice().equals(deviceId);
         UserEntity holder = inventory.getLockedBy();
         return holder != null && (user == null || !Objects.equals(holder.getId(), user.getId()));
+    }
+
+    private static boolean isSameUser(InventoriesEntity inventory, UserEntity user) {
+        UserEntity holder = inventory.getLockedBy();
+        return holder != null && user != null && Objects.equals(holder.getId(), user.getId());
     }
 
     private static boolean isStale(InventoriesEntity inventory) {

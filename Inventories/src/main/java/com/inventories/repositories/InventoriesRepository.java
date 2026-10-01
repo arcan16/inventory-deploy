@@ -36,7 +36,7 @@ public interface InventoriesRepository extends JpaRepository<InventoriesEntity, 
      */
     @Modifying
     @Query("""
-            UPDATE InventoriesEntity i SET i.status = :opened, i.lockedBy = null, i.lockedAt = null
+            UPDATE InventoriesEntity i SET i.status = :opened, i.lockedBy = null, i.lockedAt = null, i.lockedDevice = null
             WHERE i.status = :locked AND (i.lockedAt IS NULL OR i.lockedAt < :limit)
             """)
     int releaseStaleLocks(@Param("opened") InventoryStatus opened,
