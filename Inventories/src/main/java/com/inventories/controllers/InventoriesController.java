@@ -36,6 +36,9 @@ import java.util.stream.Collectors;
 @RequestMapping("/inventories")
 public class InventoriesController {
 
+    /** Identificador de la instalacion de la app; el bloqueo de inventario es por dispositivo. */
+    private static final String DEVICE_HEADER = "X-Device-Id";
+
     @Autowired
     private InventoriesRepository inventoriesRepository;
 
@@ -156,24 +159,28 @@ public class InventoriesController {
      * 409 si otro usuario lo esta usando, indicando quien.
      */
     @PutMapping("/{idInventory}/lock")
-    public ResponseEntity<?> lockInventory(@PathVariable Long idInventory, Authentication authentication){
-        InventoryLockService.Result result = inventoryLockService.lock(idInventory, currentUser(authentication));
+    public ResponseEntity<?> lockInventory(@PathVariable Long idInventory, Authentication authentication,
+                                           @RequestHeader(value = DEVICE_HEADER, required = false) String deviceId){
+        InventoryLockService.Result result = inventoryLockService.lock(idInventory, currentUser(authentication), deviceId);
         return switch (result.outcome()) {
             case NOT_FOUND -> ResponseEntity.badRequest().body("{\"err\": \"El inventario no existe\"}");
             case CLOSED -> ResponseEntity.badRequest().body("{\"err\": \"El inventario esta cerrado\"}");
             case LOCKED_BY_OTHER -> ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body("{\"err\": \"El inventario lo esta usando " + result.holder() + "\"}");
+                    .body("{\"err\": \"" + (result.sameUser()
+                            ? "El inventario esta abierto en otro dispositivo con el usuario " + result.holder()
+                            : "El inventario lo esta usando " + result.holder()) + "\"}");
             default -> ResponseEntity.ok(new InventoriesDTO(result.inventory()));
         };
     }
 
     /**
      * Regresa el inventario a OPENED al salir de su conteo (o al mandar la app a
-     * segundo plano). Si el bloqueo es de otro usuario no cambia nada.
+     * segundo plano). Si el bloqueo es de otro dispositivo no cambia nada.
      */
     @PutMapping("/{idInventory}/unlock")
-    public ResponseEntity<?> unlockInventory(@PathVariable Long idInventory, Authentication authentication){
-        InventoryLockService.Result result = inventoryLockService.unlock(idInventory, currentUser(authentication));
+    public ResponseEntity<?> unlockInventory(@PathVariable Long idInventory, Authentication authentication,
+                                             @RequestHeader(value = DEVICE_HEADER, required = false) String deviceId){
+        InventoryLockService.Result result = inventoryLockService.unlock(idInventory, currentUser(authentication), deviceId);
         if(result.outcome() == InventoryLockService.Outcome.NOT_FOUND)
             return ResponseEntity.badRequest().body("{\"err\": \"El inventario no existe\"}");
         return ResponseEntity.ok(new InventoriesDTO(result.inventory()));

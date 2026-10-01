@@ -37,4 +37,7 @@ public class InventoriesEntity {
     private UserEntity lockedBy;
 
     private Timestamp lockedAt;
+
+    /** Instalacion de la app que tiene el bloqueo (header X-Device-Id); ver InventoryLockService. */
+    private String lockedDevice;
 }
