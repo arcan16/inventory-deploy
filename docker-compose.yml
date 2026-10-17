@@ -4,12 +4,13 @@ services:
     mem_limit: 512m
     ports:
       - "8081:8081"
+    # Los valores sensibles se leen del archivo .env junto a este docker-compose.yml (ver .env.example)
     environment:
       URL_DB_INVENTORIES_COMEX: jdbc:mysql://inventories-db:3306/comex_inventory?createDatabaseIfNotExist=true
       USER_DB_INVENTORIES_COMEX: root
-      PASSWORD_DB_INVENTORIES_COMEX: ***REMOVED***
+      PASSWORD_DB_INVENTORIES_COMEX: ${PASSWORD_DB_INVENTORIES_COMEX:?Define PASSWORD_DB_INVENTORIES_COMEX en .env}
       JWT_EXPIRATION_TIME_INVENTORIES_COMEX: 86400000
-      JWT_SECRET_KEY_INVENTORIES_COMEX: ***REMOVED***
+      JWT_SECRET_KEY_INVENTORIES_COMEX: ${JWT_SECRET_KEY_INVENTORIES_COMEX:?Define JWT_SECRET_KEY_INVENTORIES_COMEX en .env}
     restart: always
     depends_on:
       inventories-db:
@@ -19,8 +20,7 @@ services:
     ports:
       - "3307:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ***REMOVED***
-      MYSQL_PASSWORD: ***REMOVED***
+      MYSQL_ROOT_PASSWORD: ${PASSWORD_DB_INVENTORIES_COMEX:?Define PASSWORD_DB_INVENTORIES_COMEX en .env}
       MYSQL_DATABASE: comex_inventory
     restart: always
     healthcheck:
